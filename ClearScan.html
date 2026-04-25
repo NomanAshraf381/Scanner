@@ -1,0 +1,1201 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>ClearScan — Document Scanner</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet"/>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/tesseract.js/4.1.1/tesseract.min.js"></script>
+<style>
+  :root {
+    --bg: #0d0f14;
+    --surface: #161921;
+    --surface2: #1e2230;
+    --surface3: #252a3a;
+    --border: #2e3348;
+    --accent: #00d4aa;
+    --accent2: #0099ff;
+    --accent3: #ff6b35;
+    --text: #e8eaf0;
+    --text2: #8a8fa8;
+    --text3: #5a5f78;
+    --danger: #ff4757;
+    --success: #00d4aa;
+    --radius: 14px;
+    --radius-sm: 8px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: 'DM Sans', sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  /* ── HEADER ── */
+  header {
+    position: sticky; top: 0; z-index: 100;
+    background: rgba(13,15,20,0.92);
+    backdrop-filter: blur(16px);
+    border-bottom: 1px solid var(--border);
+    padding: 0 20px;
+    height: 60px;
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  .logo {
+    display: flex; align-items: center; gap: 10px;
+    font-family: 'Space Mono', monospace;
+    font-weight: 700; font-size: 18px;
+    color: var(--accent);
+    letter-spacing: -0.5px;
+  }
+  .logo-icon {
+    width: 32px; height: 32px;
+    background: linear-gradient(135deg, var(--accent), var(--accent2));
+    border-radius: 8px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 16px;
+  }
+  .header-actions { display: flex; gap: 8px; }
+
+  /* ── NAV TABS ── */
+  .nav-tabs {
+    display: flex;
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    overflow-x: auto;
+    padding: 0 16px;
+    gap: 0;
+    scrollbar-width: none;
+  }
+  .nav-tabs::-webkit-scrollbar { display: none; }
+  .nav-tab {
+    padding: 14px 20px;
+    font-size: 13px; font-weight: 600;
+    color: var(--text2);
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+    white-space: nowrap;
+    transition: all 0.2s;
+    display: flex; align-items: center; gap: 6px;
+    user-select: none;
+  }
+  .nav-tab:hover { color: var(--text); }
+  .nav-tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+  /* ── MAIN ── */
+  .main { max-width: 900px; margin: 0 auto; padding: 20px 16px 100px; }
+
+  /* ── PANELS ── */
+  .panel { display: none; }
+  .panel.active { display: block; }
+
+  /* ── SCAN PANEL ── */
+  .scan-area {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    overflow: hidden;
+    position: relative;
+  }
+  #videoContainer {
+    position: relative;
+    background: #000;
+    width: 100%;
+    aspect-ratio: 4/3;
+    display: flex; align-items: center; justify-content: center;
+  }
+  #video { width: 100%; height: 100%; object-fit: cover; display: none; }
+  #captureCanvas { display: none; }
+  .camera-placeholder {
+    display: flex; flex-direction: column; align-items: center; gap: 12px;
+    color: var(--text3);
+  }
+  .camera-placeholder .icon { font-size: 56px; }
+  .camera-placeholder p { font-size: 14px; }
+  .scan-overlay {
+    position: absolute; inset: 0; pointer-events: none;
+    display: none;
+  }
+  .scan-overlay.active { display: block; }
+  .scan-corner {
+    position: absolute;
+    width: 28px; height: 28px;
+    border-color: var(--accent);
+    border-style: solid;
+    border-width: 0;
+  }
+  .scan-corner.tl { top: 20px; left: 20px; border-top-width: 3px; border-left-width: 3px; }
+  .scan-corner.tr { top: 20px; right: 20px; border-top-width: 3px; border-right-width: 3px; }
+  .scan-corner.bl { bottom: 20px; left: 20px; border-bottom-width: 3px; border-left-width: 3px; }
+  .scan-corner.br { bottom: 20px; right: 20px; border-bottom-width: 3px; border-right-width: 3px; }
+  .scan-line {
+    position: absolute; left: 20px; right: 20px; height: 2px;
+    background: linear-gradient(90deg, transparent, var(--accent), transparent);
+    animation: scanLine 2s ease-in-out infinite;
+    top: 20px;
+  }
+  @keyframes scanLine {
+    0% { top: 20px; opacity: 0; }
+    10% { opacity: 1; }
+    90% { opacity: 1; }
+    100% { top: calc(100% - 20px); opacity: 0; }
+  }
+
+  .scan-controls {
+    padding: 16px;
+    display: flex; gap: 10px; flex-wrap: wrap; align-items: center;
+  }
+
+  /* ── BUTTONS ── */
+  .btn {
+    display: inline-flex; align-items: center; gap: 7px;
+    padding: 10px 18px;
+    border-radius: var(--radius-sm);
+    font-family: 'DM Sans', sans-serif;
+    font-size: 13px; font-weight: 600;
+    cursor: pointer; border: none;
+    transition: all 0.18s;
+    white-space: nowrap;
+  }
+  .btn-primary { background: var(--accent); color: #000; }
+  .btn-primary:hover { background: #00f5c0; transform: translateY(-1px); }
+  .btn-secondary { background: var(--surface2); color: var(--text); border: 1px solid var(--border); }
+  .btn-secondary:hover { background: var(--surface3); }
+  .btn-danger { background: var(--danger); color: #fff; }
+  .btn-danger:hover { background: #ff6070; }
+  .btn-ghost { background: transparent; color: var(--text2); border: 1px solid var(--border); }
+  .btn-ghost:hover { color: var(--text); border-color: var(--text2); }
+  .btn-accent2 { background: var(--accent2); color: #fff; }
+  .btn-accent2:hover { background: #2aaeff; }
+  .btn-sm { padding: 7px 13px; font-size: 12px; }
+  .btn:disabled { opacity: 0.4; cursor: not-allowed; transform: none !important; }
+
+  /* ── CAPTURED IMAGE ── */
+  #capturedSection { display: none; margin-top: 16px; }
+  .captured-preview {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    overflow: hidden;
+  }
+  .captured-img-wrap {
+    position: relative;
+    background: #000;
+    display: flex; align-items: center; justify-content: center;
+    min-height: 200px;
+  }
+  #capturedImg {
+    max-width: 100%; max-height: 500px;
+    display: block;
+    transition: filter 0.3s;
+  }
+  .filter-controls {
+    padding: 14px 16px;
+    border-top: 1px solid var(--border);
+    display: flex; gap: 8px; flex-wrap: wrap; align-items: center;
+  }
+  .filter-label { font-size: 12px; color: var(--text2); margin-right: 4px; }
+  .filter-btn {
+    padding: 6px 12px;
+    border-radius: 20px;
+    font-size: 12px; font-weight: 600;
+    cursor: pointer; border: 1px solid var(--border);
+    background: var(--surface2); color: var(--text2);
+    transition: all 0.15s;
+  }
+  .filter-btn:hover, .filter-btn.active { background: var(--accent); color: #000; border-color: var(--accent); }
+
+  .adjust-controls {
+    padding: 0 16px 14px;
+    display: flex; gap: 16px; flex-wrap: wrap;
+  }
+  .slider-group { display: flex; flex-direction: column; gap: 4px; flex: 1; min-width: 120px; }
+  .slider-group label { font-size: 11px; color: var(--text2); display: flex; justify-content: space-between; }
+  .slider-group input[type=range] {
+    width: 100%; accent-color: var(--accent);
+    height: 4px; cursor: pointer;
+  }
+
+  .captured-actions {
+    padding: 14px 16px;
+    border-top: 1px solid var(--border);
+    display: flex; gap: 8px; flex-wrap: wrap;
+  }
+
+  /* ── PAGES / GALLERY ── */
+  .section-header {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-bottom: 14px;
+  }
+  .section-title {
+    font-size: 15px; font-weight: 700;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .badge {
+    background: var(--accent); color: #000;
+    font-size: 11px; font-weight: 700;
+    padding: 2px 8px; border-radius: 20px;
+  }
+  .pages-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+    gap: 12px;
+  }
+  .page-card {
+    background: var(--surface);
+    border: 2px solid var(--border);
+    border-radius: var(--radius-sm);
+    overflow: hidden;
+    cursor: pointer;
+    transition: all 0.2s;
+    position: relative;
+  }
+  .page-card:hover { border-color: var(--accent2); transform: translateY(-2px); }
+  .page-card.selected { border-color: var(--accent); }
+  .page-card img { width: 100%; aspect-ratio: 3/4; object-fit: cover; display: block; }
+  .page-card-footer {
+    padding: 6px 8px;
+    display: flex; align-items: center; justify-content: space-between;
+    font-size: 11px; color: var(--text2);
+  }
+  .page-card .del-btn {
+    position: absolute; top: 6px; right: 6px;
+    width: 22px; height: 22px;
+    background: rgba(255,71,87,0.9); color: #fff;
+    border: none; border-radius: 50%;
+    cursor: pointer; font-size: 12px;
+    display: flex; align-items: center; justify-content: center;
+    opacity: 0; transition: opacity 0.15s;
+  }
+  .page-card:hover .del-btn { opacity: 1; }
+
+  .empty-state {
+    text-align: center; padding: 48px 20px;
+    color: var(--text3);
+  }
+  .empty-state .icon { font-size: 48px; margin-bottom: 12px; }
+  .empty-state p { font-size: 14px; }
+
+  /* ── EXPORT PANEL ── */
+  .export-options {
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: 14px; margin-top: 16px;
+  }
+  .export-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 20px;
+    cursor: pointer;
+    transition: all 0.2s;
+    text-align: center;
+  }
+  .export-card:hover { border-color: var(--accent); background: var(--surface2); transform: translateY(-2px); }
+  .export-card .ex-icon { font-size: 36px; margin-bottom: 10px; }
+  .export-card h3 { font-size: 15px; font-weight: 700; margin-bottom: 4px; }
+  .export-card p { font-size: 12px; color: var(--text2); }
+  .export-card.pdf-card:hover { border-color: #ff4757; }
+  .export-card.jpg-card:hover { border-color: #ffd700; }
+  .export-card.zip-card:hover { border-color: var(--accent2); }
+  .export-card.txt-card:hover { border-color: var(--accent); }
+
+  /* ── OCR PANEL ── */
+  #ocrResult {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 16px;
+    min-height: 200px;
+    font-family: 'Space Mono', monospace;
+    font-size: 13px; line-height: 1.7;
+    color: var(--text);
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+  .ocr-progress {
+    display: none;
+    align-items: center; gap: 12px;
+    padding: 16px;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    margin-bottom: 12px;
+  }
+  .ocr-progress.active { display: flex; }
+  .progress-bar-wrap {
+    flex: 1; height: 6px;
+    background: var(--surface3);
+    border-radius: 3px; overflow: hidden;
+  }
+  .progress-bar {
+    height: 100%;
+    background: linear-gradient(90deg, var(--accent), var(--accent2));
+    border-radius: 3px;
+    transition: width 0.3s;
+    width: 0%;
+  }
+  .progress-label { font-size: 12px; color: var(--text2); white-space: nowrap; }
+
+  /* ── SETTINGS PANEL ── */
+  .settings-group {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    overflow: hidden;
+    margin-bottom: 16px;
+  }
+  .settings-group-title {
+    padding: 12px 16px;
+    font-size: 11px; font-weight: 700;
+    text-transform: uppercase; letter-spacing: 1px;
+    color: var(--text3);
+    background: var(--surface2);
+    border-bottom: 1px solid var(--border);
+  }
+  .setting-row {
+    padding: 14px 16px;
+    display: flex; align-items: center; justify-content: space-between;
+    border-bottom: 1px solid var(--border);
+    gap: 12px;
+  }
+  .setting-row:last-child { border-bottom: none; }
+  .setting-info h4 { font-size: 14px; font-weight: 500; margin-bottom: 2px; }
+  .setting-info p { font-size: 12px; color: var(--text2); }
+  .toggle {
+    position: relative; width: 44px; height: 24px; flex-shrink: 0;
+  }
+  .toggle input { opacity: 0; width: 0; height: 0; }
+  .toggle-slider {
+    position: absolute; inset: 0;
+    background: var(--surface3); border-radius: 12px;
+    cursor: pointer; transition: 0.3s;
+  }
+  .toggle-slider:before {
+    content: ''; position: absolute;
+    height: 18px; width: 18px; left: 3px; bottom: 3px;
+    background: #fff; border-radius: 50%;
+    transition: 0.3s;
+  }
+  .toggle input:checked + .toggle-slider { background: var(--accent); }
+  .toggle input:checked + .toggle-slider:before { transform: translateX(20px); }
+  select.setting-select {
+    background: var(--surface2); color: var(--text);
+    border: 1px solid var(--border); border-radius: var(--radius-sm);
+    padding: 6px 10px; font-size: 13px;
+    font-family: 'DM Sans', sans-serif;
+    cursor: pointer;
+  }
+
+  /* ── TOAST ── */
+  #toast {
+    position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%) translateY(80px);
+    background: var(--surface2); color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 12px 20px; font-size: 13px; font-weight: 500;
+    z-index: 9999;
+    transition: transform 0.3s ease;
+    white-space: nowrap;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+    display: flex; align-items: center; gap: 8px;
+  }
+  #toast.show { transform: translateX(-50%) translateY(0); }
+  #toast.success { border-color: var(--accent); }
+  #toast.error { border-color: var(--danger); }
+
+  /* ── MODAL ── */
+  .modal-overlay {
+    display: none; position: fixed; inset: 0;
+    background: rgba(0,0,0,0.7); backdrop-filter: blur(4px);
+    z-index: 500; align-items: center; justify-content: center; padding: 20px;
+  }
+  .modal-overlay.open { display: flex; }
+  .modal {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    width: 100%; max-width: 480px;
+    overflow: hidden;
+    animation: modalIn 0.2s ease;
+  }
+  @keyframes modalIn { from { transform: scale(0.95); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+  .modal-header {
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  .modal-title { font-size: 16px; font-weight: 700; }
+  .modal-close {
+    background: none; border: none; color: var(--text2); cursor: pointer;
+    font-size: 20px; line-height: 1; padding: 4px;
+  }
+  .modal-body { padding: 20px; }
+  .modal-footer {
+    padding: 14px 20px;
+    border-top: 1px solid var(--border);
+    display: flex; gap: 10px; justify-content: flex-end;
+  }
+
+  /* ── UPLOAD ZONE ── */
+  .upload-zone {
+    border: 2px dashed var(--border);
+    border-radius: var(--radius);
+    padding: 32px 20px;
+    text-align: center;
+    cursor: pointer;
+    transition: all 0.2s;
+    color: var(--text2);
+  }
+  .upload-zone:hover, .upload-zone.drag { border-color: var(--accent); color: var(--text); background: rgba(0,212,170,0.04); }
+  .upload-zone .icon { font-size: 36px; margin-bottom: 10px; }
+  .upload-zone p { font-size: 13px; }
+  .upload-zone span { font-size: 12px; color: var(--text3); }
+
+  /* ── RESPONSIVE ── */
+  @media (max-width: 600px) {
+    .export-options { grid-template-columns: 1fr 1fr; }
+    .scan-controls { justify-content: center; }
+    .pages-grid { grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">
+    <div class="logo-icon">📄</div>
+    ClearScan
+  </div>
+  <div class="header-actions">
+    <button class="btn btn-secondary btn-sm" onclick="document.getElementById('importInput').click()">
+      📁 Import
+    </button>
+    <input id="importInput" type="file" accept="image/*" multiple style="display:none" onchange="importImages(event)"/>
+  </div>
+</header>
+
+<div class="nav-tabs">
+  <div class="nav-tab active" data-tab="scan" onclick="switchTab('scan')">📷 Scan</div>
+  <div class="nav-tab" data-tab="pages" onclick="switchTab('pages')">🗂 Pages <span id="pageCountBadge" class="badge" style="display:none">0</span></div>
+  <div class="nav-tab" data-tab="ocr" onclick="switchTab('ocr')">🔤 OCR Text</div>
+  <div class="nav-tab" data-tab="export" onclick="switchTab('export')">📤 Export</div>
+  <div class="nav-tab" data-tab="settings" onclick="switchTab('settings')">⚙️ Settings</div>
+</div>
+
+<div class="main">
+
+  <!-- ── SCAN PANEL ── -->
+  <div class="panel active" id="tab-scan">
+    <div class="scan-area">
+      <div id="videoContainer">
+        <video id="video" autoplay playsinline></video>
+        <canvas id="captureCanvas"></canvas>
+        <div class="camera-placeholder" id="cameraPlaceholder">
+          <div class="icon">📷</div>
+          <p>Camera not started</p>
+        </div>
+        <div class="scan-overlay" id="scanOverlay">
+          <div class="scan-corner tl"></div>
+          <div class="scan-corner tr"></div>
+          <div class="scan-corner bl"></div>
+          <div class="scan-corner br"></div>
+          <div class="scan-line"></div>
+        </div>
+      </div>
+      <div class="scan-controls">
+        <button class="btn btn-primary" id="startCamBtn" onclick="startCamera()">📷 Start Camera</button>
+        <button class="btn btn-secondary" id="stopCamBtn" onclick="stopCamera()" style="display:none">⏹ Stop</button>
+        <button class="btn btn-accent2" id="captureBtn" onclick="capturePhoto()" disabled>⚡ Capture</button>
+        <button class="btn btn-ghost btn-sm" onclick="switchCamera()" id="switchCamBtn" style="display:none">🔄 Flip</button>
+        <label class="btn btn-ghost btn-sm" style="cursor:pointer">
+          🖼 Upload <input type="file" accept="image/*" style="display:none" onchange="uploadImage(event)"/>
+        </label>
+      </div>
+    </div>
+
+    <div id="capturedSection">
+      <div style="margin: 14px 0 10px; display:flex; align-items:center; justify-content:space-between;">
+        <div class="section-title">✂️ Edit Capture</div>
+      </div>
+      <div class="captured-preview">
+        <div class="captured-img-wrap">
+          <img id="capturedImg" src="" alt="Captured"/>
+        </div>
+        <div class="filter-controls">
+          <span class="filter-label">Filter:</span>
+          <button class="filter-btn active" onclick="applyFilter('none',this)">Original</button>
+          <button class="filter-btn" onclick="applyFilter('bw',this)">B&W</button>
+          <button class="filter-btn" onclick="applyFilter('enhance',this)">Enhance</button>
+          <button class="filter-btn" onclick="applyFilter('grayscale',this)">Grayscale</button>
+          <button class="filter-btn" onclick="applyFilter('sepia',this)">Sepia</button>
+          <button class="filter-btn" onclick="applyFilter('stamp',this)">Stamp</button>
+        </div>
+        <div class="adjust-controls">
+          <div class="slider-group">
+            <label>Brightness <span id="brightnessVal">100</span>%</label>
+            <input type="range" id="brightnessSlider" min="50" max="200" value="100" oninput="updateAdjustments()"/>
+          </div>
+          <div class="slider-group">
+            <label>Contrast <span id="contrastVal">100</span>%</label>
+            <input type="range" id="contrastSlider" min="50" max="250" value="100" oninput="updateAdjustments()"/>
+          </div>
+          <div class="slider-group">
+            <label>Sharpness <span id="sharpnessVal">0</span></label>
+            <input type="range" id="sharpnessSlider" min="0" max="5" value="0" oninput="updateAdjustments()"/>
+          </div>
+        </div>
+        <div class="captured-actions">
+          <button class="btn btn-primary" onclick="addPageFromCapture()">➕ Add to Document</button>
+          <button class="btn btn-secondary" onclick="retakePhoto()">🔄 Retake</button>
+          <button class="btn btn-ghost btn-sm" onclick="rotateCapture()">↩️ Rotate</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── PAGES PANEL ── -->
+  <div class="panel" id="tab-pages">
+    <div class="section-header">
+      <div class="section-title">🗂 Document Pages <span class="badge" id="pageCountBadge2">0</span></div>
+      <div style="display:flex;gap:8px;">
+        <button class="btn btn-ghost btn-sm" onclick="clearAllPages()">🗑 Clear All</button>
+        <button class="btn btn-primary btn-sm" onclick="switchTab('export')">📤 Export</button>
+      </div>
+    </div>
+    <div class="pages-grid" id="pagesGrid">
+      <div class="empty-state" style="grid-column:1/-1">
+        <div class="icon">📄</div>
+        <p>No pages yet. Scan or import images.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── OCR PANEL ── -->
+  <div class="panel" id="tab-ocr">
+    <div class="section-header">
+      <div class="section-title">🔤 OCR Text Extraction</div>
+    </div>
+    <p style="font-size:13px;color:var(--text2);margin-bottom:14px;">Extract text from your scanned document pages using AI-powered OCR.</p>
+    <div style="display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap;">
+      <button class="btn btn-primary" onclick="runOCR()">🔍 Extract Text</button>
+      <button class="btn btn-ghost btn-sm" onclick="copyOCRText()">📋 Copy</button>
+      <button class="btn btn-ghost btn-sm" onclick="downloadOCRText()">💾 Save as .txt</button>
+      <button class="btn btn-ghost btn-sm" onclick="clearOCR()">🗑 Clear</button>
+    </div>
+    <div class="ocr-progress" id="ocrProgress">
+      <span style="font-size:13px;color:var(--text2)">Processing...</span>
+      <div class="progress-bar-wrap">
+        <div class="progress-bar" id="ocrProgressBar"></div>
+      </div>
+      <span class="progress-label" id="ocrProgressLabel">0%</span>
+    </div>
+    <div id="ocrResult">Text will appear here after extraction...</div>
+  </div>
+
+  <!-- ── EXPORT PANEL ── -->
+  <div class="panel" id="tab-export">
+    <div class="section-header">
+      <div class="section-title">📤 Export Document</div>
+    </div>
+    <p style="font-size:13px;color:var(--text2);margin-bottom:6px;">
+      <strong style="color:var(--text)" id="exportPageCount">0 pages</strong> in document
+    </p>
+    <div class="export-options">
+      <div class="export-card pdf-card" onclick="exportPDF()">
+        <div class="ex-icon">📄</div>
+        <h3>PDF</h3>
+        <p>All pages in one PDF file. Best for sharing documents.</p>
+      </div>
+      <div class="export-card jpg-card" onclick="exportJPG()">
+        <div class="ex-icon">🖼</div>
+        <h3>JPG Images</h3>
+        <p>Export each page as a separate JPG image.</p>
+      </div>
+      <div class="export-card zip-card" onclick="exportZIP()">
+        <div class="ex-icon">🗜</div>
+        <h3>ZIP Archive</h3>
+        <p>All pages + PDF bundled in a single ZIP file.</p>
+      </div>
+      <div class="export-card txt-card" onclick="exportOCRTxt()">
+        <div class="ex-icon">📝</div>
+        <h3>Text (OCR)</h3>
+        <p>Extract and save all text content as .txt file.</p>
+      </div>
+    </div>
+
+    <div style="margin-top:24px;">
+      <div class="section-title" style="margin-bottom:12px;">📋 Export Settings</div>
+      <div class="settings-group">
+        <div class="setting-row">
+          <div class="setting-info">
+            <h4>PDF Page Size</h4>
+            <p>Paper size for PDF export</p>
+          </div>
+          <select class="setting-select" id="pdfPageSize">
+            <option value="a4">A4</option>
+            <option value="letter">Letter</option>
+            <option value="a3">A3</option>
+            <option value="legal">Legal</option>
+          </select>
+        </div>
+        <div class="setting-row">
+          <div class="setting-info">
+            <h4>JPG Quality</h4>
+            <p>Image quality for JPG export</p>
+          </div>
+          <select class="setting-select" id="jpgQuality">
+            <option value="0.95">High (95%)</option>
+            <option value="0.8" selected>Medium (80%)</option>
+            <option value="0.6">Low (60%)</option>
+          </select>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── SETTINGS PANEL ── -->
+  <div class="panel" id="tab-settings">
+    <div class="section-title" style="margin-bottom:16px;">⚙️ Settings</div>
+    <div class="settings-group">
+      <div class="settings-group-title">Camera</div>
+      <div class="setting-row">
+        <div class="setting-info">
+          <h4>Auto-enhance on Capture</h4>
+          <p>Automatically apply document enhancement filter</p>
+        </div>
+        <label class="toggle">
+          <input type="checkbox" id="autoEnhance" checked/>
+          <span class="toggle-slider"></span>
+        </label>
+      </div>
+      <div class="setting-row">
+        <div class="setting-info">
+          <h4>Show Scan Guide</h4>
+          <p>Show corner markers and scan line</p>
+        </div>
+        <label class="toggle">
+          <input type="checkbox" id="showGuide" checked onchange="toggleGuide()"/>
+          <span class="toggle-slider"></span>
+        </label>
+      </div>
+      <div class="setting-row">
+        <div class="setting-info">
+          <h4>Camera Resolution</h4>
+          <p>Higher = better quality, slower processing</p>
+        </div>
+        <select class="setting-select" id="camResolution">
+          <option value="hd">HD (720p)</option>
+          <option value="fhd" selected>Full HD (1080p)</option>
+          <option value="4k">4K (if supported)</option>
+        </select>
+      </div>
+    </div>
+    <div class="settings-group">
+      <div class="settings-group-title">OCR</div>
+      <div class="setting-row">
+        <div class="setting-info">
+          <h4>OCR Language</h4>
+          <p>Language for text recognition</p>
+        </div>
+        <select class="setting-select" id="ocrLang">
+          <option value="eng">English</option>
+          <option value="ara">Arabic</option>
+          <option value="urd">Urdu</option>
+          <option value="fra">French</option>
+          <option value="deu">German</option>
+          <option value="spa">Spanish</option>
+          <option value="chi_sim">Chinese (Simplified)</option>
+          <option value="hin">Hindi</option>
+        </select>
+      </div>
+    </div>
+    <div class="settings-group">
+      <div class="settings-group-title">About</div>
+      <div class="setting-row">
+        <div class="setting-info">
+          <h4>ClearScan</h4>
+          <p>Version 1.0 — Ad-Free Document Scanner</p>
+        </div>
+        <span style="font-size:12px;color:var(--accent)">✅ No Ads</span>
+      </div>
+      <div class="setting-row">
+        <div class="setting-info">
+          <h4>Clear All Data</h4>
+          <p>Remove all scanned pages from this session</p>
+        </div>
+        <button class="btn btn-danger btn-sm" onclick="clearAllPages()">Clear</button>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<!-- Toast -->
+<div id="toast">🔔 Message</div>
+
+<script>
+// ══════════════════════════════════
+//  STATE
+// ══════════════════════════════════
+let pages = [];          // {id, dataUrl, filter, brightness, contrast, rotation}
+let currentCapture = null; // temp dataUrl
+let stream = null;
+let facingMode = 'environment';
+let currentFilter = 'none';
+let currentRotation = 0;
+let ocrText = '';
+
+// ══════════════════════════════════
+//  TAB NAVIGATION
+// ══════════════════════════════════
+function switchTab(name) {
+  document.querySelectorAll('.nav-tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+  document.querySelector(`[data-tab="${name}"]`).classList.add('active');
+  document.getElementById(`tab-${name}`).classList.add('active');
+  if (name === 'export') updateExportCount();
+  if (name === 'pages') renderPages();
+}
+
+// ══════════════════════════════════
+//  CAMERA
+// ══════════════════════════════════
+async function startCamera() {
+  try {
+    const res = document.getElementById('camResolution').value;
+    const constraints = {
+      video: {
+        facingMode,
+        width: { ideal: res === '4k' ? 3840 : res === 'fhd' ? 1920 : 1280 },
+        height: { ideal: res === '4k' ? 2160 : res === 'fhd' ? 1080 : 720 }
+      }
+    };
+    stream = await navigator.mediaDevices.getUserMedia(constraints);
+    const video = document.getElementById('video');
+    video.srcObject = stream;
+    video.style.display = 'block';
+    document.getElementById('cameraPlaceholder').style.display = 'none';
+    document.getElementById('captureBtn').disabled = false;
+    document.getElementById('startCamBtn').style.display = 'none';
+    document.getElementById('stopCamBtn').style.display = '';
+    document.getElementById('switchCamBtn').style.display = '';
+    if (document.getElementById('showGuide').checked) {
+      document.getElementById('scanOverlay').classList.add('active');
+    }
+  } catch (e) {
+    showToast('❌ Camera access denied or not available', 'error');
+  }
+}
+
+function stopCamera() {
+  if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
+  const video = document.getElementById('video');
+  video.style.display = 'none';
+  video.srcObject = null;
+  document.getElementById('cameraPlaceholder').style.display = 'flex';
+  document.getElementById('captureBtn').disabled = true;
+  document.getElementById('startCamBtn').style.display = '';
+  document.getElementById('stopCamBtn').style.display = 'none';
+  document.getElementById('switchCamBtn').style.display = 'none';
+  document.getElementById('scanOverlay').classList.remove('active');
+}
+
+async function switchCamera() {
+  facingMode = facingMode === 'environment' ? 'user' : 'environment';
+  stopCamera();
+  await startCamera();
+}
+
+function capturePhoto() {
+  const video = document.getElementById('video');
+  const canvas = document.getElementById('captureCanvas');
+  canvas.width = video.videoWidth;
+  canvas.height = video.videoHeight;
+  const ctx = canvas.getContext('2d');
+  ctx.drawImage(video, 0, 0);
+  currentCapture = canvas.toDataURL('image/jpeg', 0.95);
+  currentRotation = 0;
+  currentFilter = 'none';
+  showCaptured(currentCapture);
+  if (document.getElementById('autoEnhance').checked) {
+    // auto-apply enhance
+    setTimeout(() => {
+      const btn = document.querySelector('.filter-btn[onclick*="enhance"]');
+      applyFilter('enhance', btn);
+    }, 100);
+  }
+}
+
+function uploadImage(e) {
+  const file = e.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = ev => {
+    currentCapture = ev.target.result;
+    currentRotation = 0;
+    currentFilter = 'none';
+    showCaptured(currentCapture);
+  };
+  reader.readAsDataURL(file);
+}
+
+function importImages(e) {
+  Array.from(e.target.files).forEach(file => {
+    const reader = new FileReader();
+    reader.onload = ev => {
+      addPage(ev.target.result, 'none');
+    };
+    reader.readAsDataURL(file);
+  });
+  showToast(`✅ ${e.target.files.length} image(s) imported`);
+}
+
+function showCaptured(dataUrl) {
+  document.getElementById('capturedImg').src = dataUrl;
+  document.getElementById('capturedSection').style.display = 'block';
+  // reset sliders
+  document.getElementById('brightnessSlider').value = 100;
+  document.getElementById('contrastSlider').value = 100;
+  document.getElementById('sharpnessSlider').value = 0;
+  document.getElementById('brightnessVal').textContent = 100;
+  document.getElementById('contrastVal').textContent = 100;
+  document.getElementById('sharpnessVal').textContent = 0;
+  document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+  document.querySelector('.filter-btn[onclick*="none"]').classList.add('active');
+  updateImageDisplay();
+}
+
+function retakePhoto() {
+  document.getElementById('capturedSection').style.display = 'none';
+  currentCapture = null;
+}
+
+// ══════════════════════════════════
+//  FILTERS & ADJUSTMENTS
+// ══════════════════════════════════
+const filters = {
+  none: '',
+  bw: 'grayscale(100%) contrast(150%)',
+  enhance: 'contrast(130%) brightness(105%) saturate(110%)',
+  grayscale: 'grayscale(100%)',
+  sepia: 'sepia(80%)',
+  stamp: 'grayscale(100%) contrast(200%) brightness(120%)'
+};
+
+function applyFilter(name, btn) {
+  currentFilter = name;
+  document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  updateImageDisplay();
+}
+
+function updateAdjustments() {
+  const b = document.getElementById('brightnessSlider').value;
+  const c = document.getElementById('contrastSlider').value;
+  const s = document.getElementById('sharpnessSlider').value;
+  document.getElementById('brightnessVal').textContent = b;
+  document.getElementById('contrastVal').textContent = c;
+  document.getElementById('sharpnessVal').textContent = s;
+  updateImageDisplay();
+}
+
+function updateImageDisplay() {
+  const img = document.getElementById('capturedImg');
+  const b = document.getElementById('brightnessSlider').value;
+  const c = document.getElementById('contrastSlider').value;
+  const base = filters[currentFilter] || '';
+  img.style.filter = `brightness(${b}%) contrast(${c}%) ${base}`;
+  img.style.transform = `rotate(${currentRotation}deg)`;
+}
+
+function rotateCapture() {
+  currentRotation = (currentRotation + 90) % 360;
+  updateImageDisplay();
+}
+
+// ══════════════════════════════════
+//  PAGES
+// ══════════════════════════════════
+function addPageFromCapture() {
+  if (!currentCapture) return;
+  // apply filter to canvas and get final dataUrl
+  const finalDataUrl = applyFilterToCanvas(currentCapture);
+  addPage(finalDataUrl, currentFilter);
+  document.getElementById('capturedSection').style.display = 'none';
+  currentCapture = null;
+  showToast('✅ Page added to document');
+  updatePageBadge();
+}
+
+function applyFilterToCanvas(dataUrl) {
+  const canvas = document.createElement('canvas');
+  const img = new Image();
+  img.src = dataUrl;
+  canvas.width = img.naturalWidth || 800;
+  canvas.height = img.naturalHeight || 600;
+  const ctx = canvas.getContext('2d');
+  const b = document.getElementById('brightnessSlider').value;
+  const c = document.getElementById('contrastSlider').value;
+  const base = filters[currentFilter] || '';
+  ctx.filter = `brightness(${b}%) contrast(${c}%) ${base}`;
+  ctx.drawImage(img, 0, 0);
+  return canvas.toDataURL('image/jpeg', 0.92);
+}
+
+function addPage(dataUrl, filter = 'none') {
+  pages.push({ id: Date.now() + Math.random(), dataUrl, filter });
+  updatePageBadge();
+  renderPages();
+}
+
+function deletePage(id) {
+  pages = pages.filter(p => p.id !== id);
+  updatePageBadge();
+  renderPages();
+}
+
+function clearAllPages() {
+  if (pages.length === 0) return;
+  if (confirm('Clear all pages?')) {
+    pages = [];
+    updatePageBadge();
+    renderPages();
+    showToast('🗑 All pages cleared');
+  }
+}
+
+function updatePageBadge() {
+  const n = pages.length;
+  const b1 = document.getElementById('pageCountBadge');
+  const b2 = document.getElementById('pageCountBadge2');
+  [b1, b2].forEach(b => {
+    b.textContent = n;
+    b.style.display = n > 0 ? '' : 'none';
+  });
+}
+
+function renderPages() {
+  const grid = document.getElementById('pagesGrid');
+  if (pages.length === 0) {
+    grid.innerHTML = `<div class="empty-state" style="grid-column:1/-1"><div class="icon">📄</div><p>No pages yet. Scan or import images.</p></div>`;
+    return;
+  }
+  grid.innerHTML = pages.map((p, i) => `
+    <div class="page-card" id="pc-${p.id}">
+      <img src="${p.dataUrl}" alt="Page ${i+1}" loading="lazy"/>
+      <div class="page-card-footer">
+        <span>Page ${i+1}</span>
+      </div>
+      <button class="del-btn" onclick="deletePage(${p.id})" title="Delete">✕</button>
+    </div>
+  `).join('');
+}
+
+// ══════════════════════════════════
+//  EXPORT
+// ══════════════════════════════════
+function updateExportCount() {
+  document.getElementById('exportPageCount').textContent = `${pages.length} page${pages.length !== 1 ? 's' : ''}`;
+}
+
+async function exportPDF() {
+  if (pages.length === 0) { showToast('❌ No pages to export', 'error'); return; }
+  showToast('⏳ Generating PDF...');
+  const { jsPDF } = window.jspdf;
+  const size = document.getElementById('pdfPageSize').value;
+  const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: size });
+  const pw = doc.internal.pageSize.getWidth();
+  const ph = doc.internal.pageSize.getHeight();
+
+  for (let i = 0; i < pages.length; i++) {
+    if (i > 0) doc.addPage();
+    const img = await loadImage(pages[i].dataUrl);
+    const ratio = Math.min(pw / img.width, ph / img.height);
+    const w = img.width * ratio;
+    const h = img.height * ratio;
+    const x = (pw - w) / 2;
+    const y = (ph - h) / 2;
+    doc.addImage(pages[i].dataUrl, 'JPEG', x, y, w, h);
+  }
+  doc.save('ClearScan_Document.pdf');
+  showToast('✅ PDF exported!', 'success');
+}
+
+async function exportJPG() {
+  if (pages.length === 0) { showToast('❌ No pages to export', 'error'); return; }
+  const q = parseFloat(document.getElementById('jpgQuality').value);
+  if (pages.length === 1) {
+    const a = document.createElement('a');
+    a.href = pages[0].dataUrl;
+    a.download = 'ClearScan_Page_1.jpg';
+    a.click();
+  } else {
+    pages.forEach((p, i) => {
+      setTimeout(() => {
+        const a = document.createElement('a');
+        a.href = p.dataUrl;
+        a.download = `ClearScan_Page_${i + 1}.jpg`;
+        a.click();
+      }, i * 200);
+    });
+  }
+  showToast(`✅ ${pages.length} JPG(s) exported!`, 'success');
+}
+
+async function exportZIP() {
+  if (pages.length === 0) { showToast('❌ No pages to export', 'error'); return; }
+  showToast('⏳ Creating ZIP...');
+  const zip = new JSZip();
+  const folder = zip.folder('ClearScan_Document');
+
+  // Add each page as JPG
+  pages.forEach((p, i) => {
+    const b64 = p.dataUrl.split(',')[1];
+    folder.file(`Page_${String(i+1).padStart(2,'0')}.jpg`, b64, { base64: true });
+  });
+
+  // Also add a PDF inside the zip
+  try {
+    const { jsPDF } = window.jspdf;
+    const size = document.getElementById('pdfPageSize').value;
+    const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: size });
+    const pw = doc.internal.pageSize.getWidth();
+    const ph = doc.internal.pageSize.getHeight();
+    for (let i = 0; i < pages.length; i++) {
+      if (i > 0) doc.addPage();
+      const img = await loadImage(pages[i].dataUrl);
+      const ratio = Math.min(pw / img.width, ph / img.height);
+      const w = img.width * ratio; const h = img.height * ratio;
+      doc.addImage(pages[i].dataUrl, 'JPEG', (pw-w)/2, (ph-h)/2, w, h);
+    }
+    const pdfB64 = doc.output('datauristring').split(',')[1];
+    folder.file('ClearScan_Document.pdf', pdfB64, { base64: true });
+  } catch(e) {}
+
+  // Add OCR text if available
+  if (ocrText) {
+    folder.file('extracted_text.txt', ocrText);
+  }
+
+  const blob = await zip.generateAsync({ type: 'blob', compression: 'DEFLATE', compressionOptions: { level: 6 } });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'ClearScan_Document.zip';
+  a.click();
+  URL.revokeObjectURL(url);
+  showToast('✅ ZIP exported!', 'success');
+}
+
+async function exportOCRTxt() {
+  if (pages.length === 0) { showToast('❌ No pages to export', 'error'); return; }
+  if (!ocrText) {
+    showToast('⏳ Running OCR first...'); 
+    await runOCR();
+  }
+  const blob = new Blob([ocrText], { type: 'text/plain' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = 'ClearScan_Text.txt';
+  a.click();
+  URL.revokeObjectURL(url);
+  showToast('✅ Text file exported!', 'success');
+}
+
+// ══════════════════════════════════
+//  OCR
+// ══════════════════════════════════
+async function runOCR() {
+  if (pages.length === 0) { showToast('❌ No pages to process', 'error'); return; }
+  const lang = document.getElementById('ocrLang').value;
+  const progress = document.getElementById('ocrProgress');
+  const bar = document.getElementById('ocrProgressBar');
+  const label = document.getElementById('ocrProgressLabel');
+  const result = document.getElementById('ocrResult');
+  progress.classList.add('active');
+  result.textContent = '';
+  ocrText = '';
+  let allText = '';
+
+  for (let i = 0; i < pages.length; i++) {
+    result.textContent = `Processing page ${i+1} of ${pages.length}...\n` + allText;
+    try {
+      const { data: { text } } = await Tesseract.recognize(pages[i].dataUrl, lang, {
+        logger: m => {
+          if (m.status === 'recognizing text') {
+            const overall = ((i + m.progress) / pages.length) * 100;
+            bar.style.width = overall + '%';
+            label.textContent = Math.round(overall) + '%';
+          }
+        }
+      });
+      allText += `--- Page ${i+1} ---\n${text.trim()}\n\n`;
+    } catch(e) {
+      allText += `--- Page ${i+1} --- [OCR Failed]\n\n`;
+    }
+  }
+  ocrText = allText;
+  result.textContent = ocrText || 'No text detected.';
+  progress.classList.remove('active');
+  bar.style.width = '100%';
+  label.textContent = '100%';
+  showToast('✅ OCR complete!', 'success');
+}
+
+function copyOCRText() {
+  if (!ocrText) { showToast('No text to copy', 'error'); return; }
+  navigator.clipboard.writeText(ocrText).then(() => showToast('📋 Copied to clipboard', 'success'));
+}
+
+function downloadOCRText() {
+  if (!ocrText) { showToast('No text to save', 'error'); return; }
+  const blob = new Blob([ocrText], { type: 'text/plain' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a'); a.href = url; a.download = 'scan_text.txt'; a.click();
+  URL.revokeObjectURL(url);
+}
+
+function clearOCR() {
+  ocrText = '';
+  document.getElementById('ocrResult').textContent = 'Text will appear here after extraction...';
+  document.getElementById('ocrProgressBar').style.width = '0%';
+}
+
+// ══════════════════════════════════
+//  HELPERS
+// ══════════════════════════════════
+function loadImage(src) {
+  return new Promise(res => {
+    const img = new Image();
+    img.onload = () => res(img);
+    img.src = src;
+  });
+}
+
+function toggleGuide() {
+  const overlay = document.getElementById('scanOverlay');
+  if (document.getElementById('showGuide').checked && stream) {
+    overlay.classList.add('active');
+  } else {
+    overlay.classList.remove('active');
+  }
+}
+
+let toastTimer;
+function showToast(msg, type = '') {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.className = 'show ' + type;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { t.className = type; }, 3000);
+}
+
+// Init
+updatePageBadge();
+</script>
+</body>
+</html>
